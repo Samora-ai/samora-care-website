@@ -60,16 +60,15 @@ resolve correctly on direct load/refresh.
 Live at `samoracare.com` and `samora.health`; `www.samoracare.com` 301s to the
 apex via a Cloudflare redirect rule.
 
-## Known gaps vs. the previous production site
+## Handover / access
 
-The previous version of this repo (static HTML) had integrations that this
-rewrite does **not** carry over yet:
+`HANDOVER.md` is the access inventory: every external account the site depends
+on (Cloudflare, the Google Sheet and Apps Script, GA4, Meta, Cal.com, the
+registrar), how to transfer each one, and the checks that prove the transfer
+worked. Read it before granting or taking over access.
 
-- Google Analytics (GA4) and Meta Pixel conversion tracking. The old site also
-  fired a `get_started_lead` / `Lead` event on submit; that hook is gone.
-- Privacy Policy, Terms and Conditions, Accessibility Statement pages
-  (footer links to these were removed until the pages exist again)
-- SEO infra: sitemap.xml, robots.txt, llms.txt, JSON-LD structured data
-
-These need to be reconnected/rebuilt before this is a full replacement for
-the previous production site.
+The integrations the earlier static site had — GA4, the Meta Pixel and its
+`Lead` event, the Privacy/Terms/Accessibility pages, sitemap.xml, robots.txt,
+llms.txt and JSON-LD — are all back in place. The sitemap and llms.txt are
+generated at build time from the route list in `src/prerender.tsx`, so a new
+page must be added there, not only to `src/App.tsx`.
