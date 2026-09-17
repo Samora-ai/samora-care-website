@@ -17,9 +17,9 @@ type Step =
       sub: string;
       type: 'choice';
       /**
-       * `value` is what the leads Sheet and the n8n workflow key off. It is
-       * paired with the label here so rewording a question cannot silently
-       * change the data written downstream.
+       * `value` is stored in the Care lead intake record. It is paired with
+       * the label here so rewording a question cannot silently change the
+       * data written downstream.
        */
       options: { label: string; value: string }[];
       hasHelp?: boolean;
@@ -209,10 +209,10 @@ export default function GetStarted() {
       const res = await fetch('/api/lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // The server answers as soon as the lead is stored, so this only has to
-        // cover a bad connection rather than a slow Sheet write.
+        // The endpoint confirms only after the backend has created the lead.
         signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
+          form: 'get_started',
           ...answers,
           ...texts,
           firstName: contact.firstName.trim(),
@@ -220,9 +220,7 @@ export default function GetStarted() {
           email: contact.email.trim(),
           phone: contact.phone.trim(),
           countryCode: '+1',
-          // Recorded either way. Proof that consent was given matters, but so
-          // does proof that it was declined.
-          smsConsent: smsConsent ? 'yes' : 'no',
+          smsConsent,
         }),
       });
       if (!res.ok) throw new Error(`lead endpoint returned ${res.status}`);
@@ -526,6 +524,7 @@ export default function GetStarted() {
                   .
                 </span>
               </label>
+
             </div>
           )}
 
@@ -569,7 +568,12 @@ export default function GetStarted() {
         >
           ‹ Back
         </button>
-        <button type="button" className="next-btn" onClick={goNext} disabled={submitting}>
+        <button
+          type="button"
+          className="next-btn"
+          onClick={goNext}
+          disabled={submitting}
+        >
           {submitting && <span className="btn-spinner" aria-hidden="true" />}
           {isIntro ? 'Start' : isLast ? (submitting ? 'Sending' : 'Submit') : 'Next'}
         </button>

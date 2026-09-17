@@ -1,7 +1,8 @@
 # Lead intake Apps Script
 
-Receives leads from `samoracare.com/api/lead`, writes them to the spreadsheet,
-and emails the team. Replaces the n8n step.
+Receives Register-form leads from `samoracare.com/api/lead`, writes them to the
+spreadsheet, and emails the team. The eligibility screener now writes directly
+to `ssdi.leads` through the Samora backend and does not call this script.
 
 `Code.gs` is the source of truth. Edit it here, then paste into the Apps Script
 editor, so the deployed script and the repo do not drift.
@@ -12,9 +13,10 @@ editor, so the deployed script and the repo do not drift.
 node apps-script/test-local.mjs
 ```
 
-Runs `Code.gs` under Node with the Google globals stubbed, so both form shapes
-go through the real routing, column mapping, duplicate check and email builder
-without a sheet or an inbox. Faster than deploying to find a typo.
+Runs `Code.gs` under Node with the Google globals stubbed, so the retained
+Register flow goes through the real routing, column mapping, duplicate check
+and email builder without a sheet or an inbox. Faster than deploying to find a
+typo.
 
 ## Deploy
 
@@ -71,9 +73,8 @@ stays the same. Editing the code alone changes nothing that is live.
 
 ## Things worth knowing
 
-- **Two tabs**, created automatically on first lead of each kind: `Screener
-  leads` and `Register leads`. The forms ask different questions, so one shared
-  tab would be mostly blank cells.
+- **Register leads** are created automatically on first submission. The old
+  `Screener leads` tab is historical and should receive no new browser traffic.
 - **Add columns at the end only.** Rows are written by column order.
 - **Duplicate protection** is by `lead_id`. The Worker retries three times, so
   without it a lost response would mean a second row and a second email.

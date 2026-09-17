@@ -28,3 +28,7 @@ dist-ssr
 
 # Prerender intermediate output
 .ssr-dist
+
+# Cloudflare Pages local runtime and local function secrets
+.wrangler/
+.dev.vars
