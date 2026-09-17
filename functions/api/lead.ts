@@ -130,20 +130,16 @@ async function deliver(env: Env, key: string, payload: SheetPayload): Promise<vo
       if (await forward(env.LEAD_ENDPOINT, payload, env.LEAD_TOKEN, timeout)) {
         try {
           await env.LEADS.put(key, JSON.stringify({ ...payload, delivered: true }));
-        } catch (err) {
+        } catch {
           // The row landed in the Sheet, which is what matters. Losing the
           // flag only costs accuracy in the pending-leads audit.
-          console.error(`lead: delivered but could not update ${key}`, err);
         }
         return;
       }
-      // Never log the payload itself — it is health and contact information.
-      console.error(`lead: upstream rejected ${key} (attempt ${attempt}/${ATTEMPT_TIMEOUTS_MS.length})`);
-    } catch (err) {
-      console.error(`lead: upstream failed for ${key} (attempt ${attempt}/${ATTEMPT_TIMEOUTS_MS.length})`, err);
+    } catch {
+      // A failed lead remains pending in KV for recovery.
     }
   }
-  console.error(`lead: giving up on ${key}; it stays pending in KV for recovery`);
 }
 
 const APPLICATION_STATUSES = new Set(['first_time', 'denied', 'appealing', 'not_sure']);
@@ -244,7 +240,6 @@ async function forwardScreener(
   payload: CareLeadPayload,
 ): Promise<Response> {
   if (!env.CARE_LEAD_ENDPOINT) {
-    console.error('lead: Care lead ingestion is not configured');
     return Response.json({ ok: false, error: 'not_configured' }, { status: 500 });
   }
 
@@ -256,10 +251,7 @@ async function forwardScreener(
       signal: AbortSignal.timeout(12_000),
     });
     if (response.ok) return Response.json({ ok: true });
-    console.error(`lead: Care backend rejected submission (${response.status})`);
-  } catch (error) {
-    console.error('lead: Care backend request failed', error);
-  }
+  } catch {}
   return Response.json({ ok: false, error: 'upstream' }, { status: 502 });
 }
 
@@ -269,7 +261,6 @@ async function handleRegister(
   body: Record<string, unknown>,
 ): Promise<Response> {
   if (!env.LEAD_ENDPOINT) {
-    console.error('lead: LEAD_ENDPOINT is not configured');
     return Response.json({ ok: false, error: 'not_configured' }, { status: 500 });
   }
 
@@ -285,10 +276,9 @@ async function handleRegister(
 
   try {
     await env.LEADS.put(key, JSON.stringify({ ...payload, delivered: false }));
-  } catch (err) {
+  } catch {
     // KV is the thing that makes an early confirmation honest. Without it,
     // fall back to forwarding inline rather than claiming a lead was captured.
-    console.error('lead: KV write failed, forwarding inline instead', err);
     const ok = await forward(env.LEAD_ENDPOINT, payload, env.LEAD_TOKEN).catch(
       () => false,
     );
