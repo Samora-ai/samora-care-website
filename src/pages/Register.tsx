@@ -176,6 +176,9 @@ export default function Register() {
     setSubmitting(true);
     setSubmitFailed(false);
     try {
+      // The shared Pages endpoint routes this explicitly tagged shape through
+      // the retained Apps Script/email flow; the eligibility screener uses the
+      // backend lead-ingestion branch instead.
       const res = await fetch('/api/lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

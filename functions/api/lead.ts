@@ -1,14 +1,12 @@
 /**
- * Receives a completed screener and forwards it to the Google Apps Script
- * endpoint that feeds the leads Sheet and the n8n workflow.
- *
- * The browser used to POST that endpoint directly with `mode: 'no-cors'`,
- * which made every response opaque — a lead dropped by a failing Apps Script
- * looked exactly like a lead that landed. Proxying server-side gives us a real
- * status code, one retry, and a failure the user can actually see and act on.
+ * Receives both public form shapes:
+ * - the eligibility screener is validated then persisted through the public
+ *   Samora backend API;
+ * - the unrelated Register form retains its existing Apps Script delivery.
  */
 
 interface Env {
+  /** Existing Apps Script endpoint used only by the Register form. */
   LEAD_ENDPOINT: string;
   LEADS: KVNamespace;
   /**
@@ -19,6 +17,8 @@ interface Env {
    * out in either order.
    */
   LEAD_TOKEN?: string;
+  /** Public backend endpoint for the eligibility screener. */
+  CARE_LEAD_ENDPOINT?: string;
 }
 
 /**
@@ -45,39 +45,8 @@ const RETRY_PAUSES_MS = [1_000, 2_000];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Two shapes reach this endpoint. The screener sends the original one; the
- * register page sends the second. `type` is the discriminator the Sheet and the
- * n8n workflow route on, so a register lead can get its own email template
- * without the screener's contract changing at all.
- */
-type SheetPayload = ScreenerPayload | RegisterPayload;
-
-/** Field names the existing Sheet columns and n8n workflow expect. */
-interface ScreenerPayload {
-  type: 'get_started';
-  /** Stable id for this submission, so a retry cannot create a second row. */
-  lead_id: string;
-  fullName: string;
-  email: string;
-  phone: string;
-  countryCode: string;
-  first_time_applying: string;
-  conditions: string;
-  seeing_doctors: string;
-  last_able_to_work: string;
-  job_title: string;
-  /**
-   * 'yes', 'no' or 'not_sure'. Contacting someone who already has
-   * representation is not allowed, so this has to travel with every lead.
-   */
-  has_attorney: string;
-  /**
-   * 'yes' or 'no'. Kept for every submission, not just the opt-ins — carriers
-   * and the TCPA care about being able to show what someone actually chose.
-   */
-  sms_consent: string;
-}
+/** Field names the existing Register Sheet columns expect. */
+type SheetPayload = RegisterPayload;
 
 /** The register form at /register. */
 interface RegisterPayload {
@@ -99,9 +68,6 @@ interface RegisterPayload {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** Matches the old form's sentinel so the Sheet stays consistent. */
-const NEVER_WORKED_JOB = 'N/A - never worked';
 
 function str(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -128,39 +94,6 @@ function buildRegister(body: Record<string, unknown>, leadId: string): RegisterP
     owes_overpayment: str(body.owesOverpayment, 4),
     health_conditions: str(body.healthConditions, 4),
     has_attorney: str(body.hasAttorney, 10),
-    sms_consent: body.smsConsent === 'yes' ? 'yes' : 'no',
-  };
-}
-
-function build(body: Record<string, unknown>, leadId: string): SheetPayload | null {
-  if (body.form === 'register') return buildRegister(body, leadId);
-  return buildScreener(body, leadId);
-}
-
-function buildScreener(body: Record<string, unknown>, leadId: string): ScreenerPayload | null {
-  const firstName = str(body.firstName, 100);
-  const lastName = str(body.lastName, 100);
-  const email = str(body.email, 200);
-  const lastAbleToWork = str(body.lastWork, 40);
-  const job = str(body.job, 100);
-
-  // Mirrors the client-side rules. The client can be bypassed; the Sheet
-  // should never receive a lead we cannot follow up on.
-  if (!firstName || !lastName || !EMAIL_RE.test(email)) return null;
-
-  return {
-    type: 'get_started',
-    lead_id: leadId,
-    fullName: `${firstName} ${lastName}`,
-    email,
-    phone: str(body.phone, 40),
-    countryCode: str(body.countryCode, 8) || '+1',
-    first_time_applying: str(body.applied, 40),
-    conditions: str(body.conditions, 500),
-    seeing_doctors: str(body.doctors, 40),
-    last_able_to_work: lastAbleToWork,
-    job_title: job || (lastAbleToWork === 'never' ? NEVER_WORKED_JOB : ''),
-    has_attorney: str(body.attorney, 10),
     sms_consent: body.smsConsent === 'yes' ? 'yes' : 'no',
   };
 }
@@ -213,21 +146,135 @@ async function deliver(env: Env, key: string, payload: SheetPayload): Promise<vo
   console.error(`lead: giving up on ${key}; it stays pending in KV for recovery`);
 }
 
-export const onRequestPost: PagesFunction<Env> = async ({ request, env, waitUntil }) => {
+const APPLICATION_STATUSES = new Set(['first_time', 'denied', 'appealing', 'not_sure']);
+const REPRESENTATION_STATUSES = new Set(['yes', 'no', 'not_sure']);
+const MEDICAL_CARE_STATUSES = new Set(['regularly', 'sometimes', 'not_easy', 'no']);
+const LAST_WORK_STATUSES = new Set([
+  'still_working',
+  'within_6mo',
+  '6mo_to_1yr',
+  'over_1yr',
+  'never',
+]);
+
+interface CareLeadPayload {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone_number?: string;
+  application_status: string;
+  representation_status: string;
+  health_conditions: string;
+  medical_care_status: string;
+  last_work_status: string;
+  job_title: string;
+  sms_consent: boolean;
+}
+
+function required(value: unknown, min: number, max: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length >= min && normalized.length <= max ? normalized : null;
+}
+
+function choice(value: unknown, allowed: Set<string>): string | null {
+  const normalized = required(value, 1, 40)?.toLowerCase();
+  return normalized && allowed.has(normalized) ? normalized : null;
+}
+
+function normalizeUSPhone(value: unknown): string | null | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (raw.length === 0) return undefined;
+  if (!/^[+\d\s().-]+$/.test(raw)) return null;
+  const compact = raw.replace(/[\s().-]/g, '');
+  if (/^\+[1-9]\d{7,14}$/.test(compact)) return compact;
+  if (/^\d{10}$/.test(compact)) return `+1${compact}`;
+  if (/^1\d{10}$/.test(compact)) return `+${compact}`;
+  return null;
+}
+
+function buildScreener(body: Record<string, unknown>): CareLeadPayload | null {
+  const firstName = required(body.firstName, 1, 100);
+  const lastName = required(body.lastName, 1, 100);
+  const email = required(body.email, 3, 254)?.toLowerCase();
+  const applicationStatus = choice(body.applied, APPLICATION_STATUSES);
+  const representationStatus = choice(body.attorney, REPRESENTATION_STATUSES);
+  const healthConditions = required(body.conditions, 10, 500);
+  const medicalCareStatus = choice(body.doctors, MEDICAL_CARE_STATUSES);
+  const lastWorkStatus = choice(body.lastWork, LAST_WORK_STATUSES);
+  let jobTitle = required(body.job, 3, 100);
+  const phoneNumber = normalizeUSPhone(body.phone);
+
+  if (lastWorkStatus === 'never' && !jobTitle) jobTitle = 'N/A - never worked';
+  if (
+    !firstName ||
+    !lastName ||
+    !email ||
+    !EMAIL_RE.test(email) ||
+    !applicationStatus ||
+    !representationStatus ||
+    !healthConditions ||
+    !medicalCareStatus ||
+    !lastWorkStatus ||
+    !jobTitle ||
+    phoneNumber === null
+  ) {
+    return null;
+  }
+
+  return {
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    ...(phoneNumber ? { phone_number: phoneNumber } : {}),
+    application_status: applicationStatus,
+    representation_status: representationStatus,
+    health_conditions: healthConditions,
+    medical_care_status: medicalCareStatus,
+    last_work_status: lastWorkStatus,
+    job_title: jobTitle,
+    sms_consent: body.smsConsent === true || body.smsConsent === 'yes',
+  };
+}
+
+async function forwardScreener(
+  env: Env,
+  payload: CareLeadPayload,
+): Promise<Response> {
+  if (!env.CARE_LEAD_ENDPOINT) {
+    console.error('lead: Care lead ingestion is not configured');
+    return Response.json({ ok: false, error: 'not_configured' }, { status: 500 });
+  }
+
+  try {
+    const response = await fetch(env.CARE_LEAD_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (response.ok) return Response.json({ ok: true });
+    console.error(`lead: Care backend rejected submission (${response.status})`);
+  } catch (error) {
+    console.error('lead: Care backend request failed', error);
+  }
+  return Response.json({ ok: false, error: 'upstream' }, { status: 502 });
+}
+
+async function handleRegister(
+  env: Env,
+  waitUntil: (promise: Promise<unknown>) => void,
+  body: Record<string, unknown>,
+): Promise<Response> {
   if (!env.LEAD_ENDPOINT) {
     console.error('lead: LEAD_ENDPOINT is not configured');
     return Response.json({ ok: false, error: 'not_configured' }, { status: 500 });
   }
 
-  let body: Record<string, unknown>;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ ok: false, error: 'bad_json' }, { status: 400 });
-  }
-
   const leadId = crypto.randomUUID();
-  const payload = build(body, leadId);
+  const payload = buildRegister(body, leadId);
   if (!payload) {
     return Response.json({ ok: false, error: 'invalid' }, { status: 400 });
   }
@@ -252,4 +299,26 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, waitUnti
 
   waitUntil(deliver(env, key, payload));
   return Response.json({ ok: true });
+}
+
+export const onRequestPost: PagesFunction<Env> = async ({ request, env, waitUntil }) => {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ ok: false, error: 'bad_json' }, { status: 400 });
+  }
+
+  if (body.form === 'register') {
+    return handleRegister(env, waitUntil, body);
+  }
+  if (body.form !== 'get_started') {
+    return Response.json({ ok: false, error: 'invalid' }, { status: 400 });
+  }
+
+  const payload = buildScreener(body);
+  if (!payload) {
+    return Response.json({ ok: false, error: 'invalid' }, { status: 400 });
+  }
+  return forwardScreener(env, payload);
 };

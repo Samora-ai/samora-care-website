@@ -5,12 +5,14 @@ compatibility_date = "2026-06-21"
 # Consumed by functions/api/lead.ts. Declared here rather than in the dashboard
 # because a project with a wrangler.toml ignores dashboard-defined vars.
 [vars]
+# Register continues to use the Apps Script/Sheet path.
 LEAD_ENDPOINT = "https://script.google.com/macros/s/AKfycbxilAvJyIJH7XgD-Jf_P9za1TzU2sCj5mh8Eo5AfnDziIyIySK5dKHdNYVNsKNEh7Kh/exec"
+# The eligibility screener posts here from functions/api/lead.ts.
+CARE_LEAD_ENDPOINT = "https://api.samora.ai/v2/public/samora-care/leads"
 
-# Durable landing spot for a submission, written before the visitor is told the
-# form went through. Forwarding to Apps Script then happens after the response,
-# so a slow Sheet write no longer holds anyone on the last screen. Declared here
-# because a project with a wrangler.toml ignores dashboard bindings.
+# Durable landing spot for Register submissions, written before the visitor is
+# told the form went through. Declared here because a project with a
+# wrangler.toml ignores dashboard bindings.
 [[kv_namespaces]]
 binding = "LEADS"
 id = "c879fa3a5a32405093ae64d1ead422e3"

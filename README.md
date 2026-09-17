@@ -14,17 +14,17 @@ Disability benefits marketing site and eligibility screener.
 ## Tech stack
 
 - React + TypeScript + Vite, client-side routed with React Router
-- One Cloudflare Pages Function, `functions/api/lead.ts`, which receives the
-  completed screener and forwards it to the Google Apps Script endpoint that
-  feeds the leads Sheet and the n8n workflow. Analytics and CRM are still
-  unwired.
+- One Cloudflare Pages Function, `functions/api/lead.ts`. The eligibility
+  screener is saved through the public Samora backend API; the separate Register
+  form continues to use the existing Apps Script/email path.
 
 ### Screener option values
 
 Each choice option in `src/pages/GetStarted.tsx` carries an explicit `value`
-next to its label — `first_time`, `never`, and so on. The Sheet columns and
-the n8n branching key off those slugs, so **edit the labels freely but do not
-change the values** without updating the downstream workflow.
+next to its label — `first_time`, `never`, and so on. The backend validates and
+stores these exact slugs under `ssdi.leads.metadata.ads_screener`, so **edit the
+labels freely but do not change the values** without updating the backend
+contract.
 
 ## Local development
 
@@ -41,13 +41,16 @@ truth for build output, vars, and bindings; the dashboard's own fields are
 displayed but ignored. Add any future binding to `wrangler.toml` or it will
 silently not exist at runtime.
 
-### Recovering a lead that never reached the Sheet
+Set this deployment value before enabling the screener:
 
-Every submission is written to the `LEADS` KV namespace under
-`lead:<timestamp>:<uuid>` before the visitor is told the form went through, and
-is rewritten with `delivered: true` once Apps Script accepts it. Anything left
-with `delivered: false` is a lead that never made it to the Sheet and needs
-chasing by hand:
+- `CARE_LEAD_ENDPOINT` is the public backend intake URL in `wrangler.toml`.
+
+### Recovering a Register lead that never reached the Sheet
+
+Only the Register form uses the `LEADS` KV namespace. It writes
+`lead:<timestamp>:<uuid>` before the visitor is told the form went through and
+rewrites it with `delivered: true` once Apps Script accepts it. Anything left
+with `delivered: false` is a Register lead that needs chasing by hand:
 
 ```
 npx wrangler kv key list --namespace-id c879fa3a5a32405093ae64d1ead422e3
